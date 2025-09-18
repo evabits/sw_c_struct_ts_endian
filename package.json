@@ -6,6 +6,7 @@
   "types": "dist/struct.d.ts",
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
     "struct": "node dist/struct.js",
     "test": "node dist/test.js",
     "e2e": "npm run build && npm run test"
