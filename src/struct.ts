@@ -20,6 +20,8 @@ export interface MemberFunctionObject {
     [key: string]: MemberFn;
 }
 
+type Endianess = 'LE' | 'BE';
+
 var extractTypeInfo = function(type: string) : {type: string, sz: number, arr: boolean}
 {
     var regex = /(\w+)\[(\*|\d+)\]/g;
@@ -110,9 +112,63 @@ var serializeMember = function (mem: MemberDefinition, val: any): ArrayBuffer {
     if(isRegisteredStruct(t))
         return serializeStructBuffer(val, isArr, arrSz);
     else {
-        buff = new (<any>TypedArr)[t][0](arrSz);
-        serializeArrayMember(buff, val, isArr, arrSz);
-        return buff.buffer;
+        // Use DataView to control endianess for multi-byte types
+        var elemSize = (<any>TypedArr)[t][1];
+        var totalBytes = elemSize * (isArr ? arrSz : 1);
+        // char/int8/uint8 can be handled as bytes directly
+        if (t === 'char' || t === 'int8' || t === 'uint8') {
+            var u8 = new Uint8Array(isArr ? arrSz : 1);
+            serializeArrayMember(u8, val, isArr, arrSz);
+            return u8.buffer;
+        }
+
+        var ab = new ArrayBuffer(totalBytes);
+        var dv = new DataView(ab);
+        var little = (Struct.endian === 'LE');
+
+        var writeElem = function(index: number, v: number) {
+            var byteOffset = index * elemSize;
+            switch (t) {
+                case 'int16':
+                case 'short':
+                case 'ushort':
+                case 'uint16':
+                    if (t === 'uint16' || t === 'ushort')
+                        dv.setUint16(byteOffset, v, little);
+                    else
+                        dv.setInt16(byteOffset, v, little);
+                    break;
+                case 'int32':
+                case 'int':
+                    dv.setInt32(byteOffset, v, little);
+                    break;
+                case 'uint32':
+                case 'uint':
+                    dv.setUint32(byteOffset, v, little);
+                    break;
+                case 'float32':
+                case 'float':
+                    dv.setFloat32(byteOffset, v, little);
+                    break;
+                case 'float64':
+                case 'double':
+                    dv.setFloat64(byteOffset, v, little);
+                    break;
+                default:
+                    // fallback: write as bytes if unknown
+                    dv.setUint8(byteOffset, v & 0xff);
+            }
+        };
+
+        if (isArr) {
+            var minSize = Math.min(val.length, arrSz);
+            for (var i = 0; i < minSize; ++i) {
+                writeElem(i, val[i]);
+            }
+        } else {
+            writeElem(0, val);
+        }
+        return ab;
     }
 }
 var deSerializeArrayMember = function (buff: Uint8Array, isArray: boolean, type: string, arrSz: number): any {
@@ -172,13 +228,55 @@ var deSerializeMember = function (ab: ArrayBuffer, off: number, obj: any, mem: M
         deSerializeStructBuffer(ab, off, obj[mem.name], isArr, arrSz);
     }
     else {
-        if(off % (<any>TypedArr)[t][1] == 0)
-            buff = new (<any>TypedArr)[t][0](ab, off, arrSz);
-        else {
-            let buff1 = ab.slice(off, off + arrSz * (<any>TypedArr)[t][1]);
-            buff = new (<any>TypedArr)[t][0](buff1, 0, arrSz);
+        var elemSize = (<any>TypedArr)[t][1];
+
+        // For byte types we can reuse TypedArray methods (and return Uint8Array for uint8)
+        if (t === 'char' || t === 'int8' || t === 'uint8') {
+            // create a Uint8Array view of the region
+            var u8 = new Uint8Array(ab, off, (isArr ? arrSz : 1));
+            obj[mem.name] = deSerializeArrayMember(u8, isArr, t, arrSz);
+            return;
         }
-        obj[mem.name] = deSerializeArrayMember(buff, isArr, t, arrSz);
+
+        // Use DataView to read values respecting Struct.endian
+        var little = (Struct.endian === 'LE');
+        var dv = new DataView(ab, off, (isArr ? arrSz : 1) * elemSize);
+
+        var readElem = function(index: number) {
+            var byteOffset = index * elemSize;
+            switch (t) {
+                case 'int16':
+                case 'short':
+                    return dv.getInt16(byteOffset, little);
+                case 'uint16':
+                case 'ushort':
+                    return dv.getUint16(byteOffset, little);
+                case 'int32':
+                case 'int':
+                    return dv.getInt32(byteOffset, little);
+                case 'uint32':
+                case 'uint':
+                    return dv.getUint32(byteOffset, little);
+                case 'float32':
+                case 'float':
+                    return dv.getFloat32(byteOffset, little);
+                case 'float64':
+                case 'double':
+                    return dv.getFloat64(byteOffset, little);
+                default:
+                    return dv.getUint8(byteOffset);
+            }
+        };
+
+        if (isArr) {
+            var arr = [];
+            for (var i = 0; i < arrSz; ++i) {
+                arr.push(readElem(i));
+            }
+            obj[mem.name] = arr;
+        } else {
+            obj[mem.name] = readElem(0);
+        }
     }
 }
 var copyBuffer = function (dest: ArrayBuffer, off: number, src: ArrayBuffer, len: number): number {
@@ -556,6 +654,9 @@ export class Struct {
     protected static unique: number = 0;
     static registeredTypes: {[key: string]: typeof Struct} = {};
     static size: number = 0;
+    // default endianess: little-endian
+    static endian: Endianess = 'LE';
+    static setEndian(e: Endianess) { Struct.endian = e; }
     static get type(): string {return ""};   //type of the struct
     static sizeof(obj: typeof Struct | Struct): number {
         let structObj: any = obj;
