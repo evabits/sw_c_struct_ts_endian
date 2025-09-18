@@ -4,7 +4,7 @@ Create C compatible struct with automatic padding and array member support
 
 Installation
 ------------
-    npm install @ragarwal33/struct-ts
+    npm install https://github.com/evabits/sw_c_struct_ts_endian
 
 Supports
 --------

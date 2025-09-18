@@ -2,6 +2,10 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+## [1.1.3] - 2025-9-18
+### added
++ endianness configuration option
+
 ## [1.1.0] - 2021-10-28
 
 ### Added
